@@ -90,7 +90,7 @@ byte tempoCount=0;
 
 
 byte editMode = 0;
-const byte editModeNum = 6;                        // number of edit modes (divider, offset, swing, autoreset, polarity)
+const byte editModeNum = 6;                        // number of edit modes (divider, offset, swing, autoreset, polarity, x)
 byte editTrig = 0;
 byte switchesA;                                    // attached to shift register
 byte statusPinsA = 0;
@@ -110,7 +110,6 @@ void setup() {
   setup_pins();
   updateLeds(statusPinsA, statusPinsB);
   serial_display_setup();
- // Serial.begin(9600);
 }
 
 
@@ -122,6 +121,8 @@ NewSoftSerial mySerialPort(SERIAL_IN,SERIAL_OUT);
 
 void serial_display_setup() {
   mySerialPort.begin(9600);
+  mySerialPort.print(127);
+  mySerialPort.print(6);
   clearScreen();
   mySerialPort.print("z");
   mySerialPort.print(B00000000,BYTE);   // set to maximum brightness
@@ -178,8 +179,8 @@ void displayDivider(int divider) {
      mySerialPort.print(1);
      int noteLength = 96 / divider;
      display2digit(noteLength);
-     mySerialPort.print("w");
-     mySerialPort.print(B00010000,BYTE);       // print colon
+     //mySerialPort.print("w");
+     //mySerialPort.print(B00010000,BYTE);       // print colon
    } else {
      int denominator = divider / 96;
      mySerialPort.print(" ");
@@ -206,7 +207,13 @@ void displayDivider(int divider) {
  }
  
  void displayAutoreset(int autoreset) {
-     clearScreen();
+     if(autoreset==0) {
+       mySerialPort.print(" off");
+       mySerialPort.print("w");
+       mySerialPort.print(B00000000,BYTE);       // clear
+     } else {
+       displayDivider(autoreset);
+     }
  }
  
  void displayPolarity(boolean polarity) {
@@ -394,7 +401,7 @@ void loop() {
       changeAutoreset(1);
       changeAutoreset(2);
       changeAutoreset(3);
-      displayAutoreset(trig_out_autoreset[currentlyEditedTrigger]);
+      displayAutoreset(autoreset_divisions[trig_out_autoreset[currentlyEditedTrigger]]);
       break;
     case 5:
       // do polarity change
@@ -468,7 +475,7 @@ void editModeCheck(byte output) {
  
 } 
  
-void clearTrigLEDs() {
+void clearTrigLEDs() {  
    bitWrite(statusPinsA, 0, 0);
    bitWrite(statusPinsA, 1, 0);
    bitWrite(statusPinsA, 2, 0);
@@ -581,19 +588,19 @@ void changeMute(byte output) {
 
 void changeAutoreset(byte output) {
    if(trig_out_editmode[output]==true) {  
-     if(checkSwitchPressed(SWI_DOWN)==true) {
-       if(trig_out_autoreset[output]<(sizeof(autoreset_divisions)/sizeof(int))) {
+     if(checkSwitchPressed(SWI_UP)==true) {
+       if(trig_out_autoreset[output]<(sizeof(autoreset_divisions)/sizeof(int))-1) {
          trig_out_autoreset[output] = trig_out_autoreset[output]++;
        }
      }
-     checkSwitchUp(SWI_DOWN);
+     checkSwitchUp(SWI_UP);
           
-     if(checkSwitchPressed(SWI_UP)==true) {
+     if(checkSwitchPressed(SWI_DOWN)==true) {
        if(trig_out_autoreset[output]>0) {
          trig_out_autoreset[output] = trig_out_autoreset[output]--;
        }
      }
-     checkSwitchUp(SWI_UP);
+     checkSwitchUp(SWI_DOWN);
    }
 }
 
@@ -601,7 +608,7 @@ void changeAutoreset(byte output) {
 void autoReset(byte output) {
   if(autoreset_divisions[trig_out_autoreset[output]]!=0 && trig_sync_trig_count[output]>0) {
     if(autoreset_divisions[trig_out_autoreset[output]]==trig_sync_trig_count[output]) {
-      trig_sync_trig_count[output]=SYNC_ZERO_CLOCK;
+      trig_sync_trig_count[output]=0;
     }
   }
 }
