@@ -57,12 +57,8 @@
 #define SWI_UP 5
 #define SWI_SHIFT 7
 
-
-
-
 const byte total_triggers = 4;
 const byte max_offset = 15;
-
 
 byte trig_out_pin[total_triggers] = { DOUT_TRIG_OUT_0, 
                                       DOUT_TRIG_OUT_1, 
@@ -74,10 +70,15 @@ boolean trig_out_state[total_triggers] = { false, false, false, false }; // is t
 unsigned int trig_out_length[total_triggers] = {5, 5, 5, 5};             // length in milliseconds
 unsigned long trig_out_time[total_triggers];                             // time last triggered
 boolean trig_out_editmode[total_triggers] = {false,false,false,false};    
+boolean trig_out_polarity[total_triggers] = {true,true,true,true};       // polarity of trigger, true = pos, false = short
+int trig_out_swing[total_triggers] = {0,0,0,0};
+int trig_out_autoreset[total_triggers] = {0,0,0,0};
+long trig_sync_trig_count[total_triggers] = {SYNC_ZERO_CLOCK, SYNC_ZERO_CLOCK, SYNC_ZERO_CLOCK, SYNC_ZERO_CLOCK};
+boolean trig_out_muted[total_triggers] = {false,false,false,false};
 
-const byte dividersNum = 11;
-byte dividers[] = {2, 3, 6, 8, 12, 16, 24, 32, 48, 72, 96, 144, 192};
-
+const byte dividersNum = 15;
+int dividers[] = {2, 3, 6, 8, 12, 16, 24, 32, 48, 72, 96, 144, 192, 288, 384};
+int autoreset_divisions[] = {0, 48, 96, 144, 192};
 
 long sync_trig_count = SYNC_ZERO_CLOCK;
 
@@ -95,6 +96,7 @@ byte switchesA;                                    // attached to shift register
 byte statusPinsA = 0;
 byte statusPinsB = 0;
 byte currentlyEditedTrigger = 255;                 // 255 is the off value.
+byte lastEditedTrigger = 254;
 
 byte lastSwitchStatus;        // last status of the switches
 
@@ -106,9 +108,9 @@ boolean trig_last = false;
 
 void setup() {
   setup_pins();
-  setup_defaults();
   updateLeds(statusPinsA, statusPinsB);
   serial_display_setup();
+ // Serial.begin(9600);
 }
 
 
@@ -123,9 +125,6 @@ void serial_display_setup() {
   clearScreen();
   mySerialPort.print("z");
   mySerialPort.print(B00000000,BYTE);   // set to maximum brightness
-}
-
-void setup_defaults() {         
 }
 
  
@@ -156,6 +155,10 @@ void check_running() {
    } else {
        running=false; 
        sync_trig_count = SYNC_ZERO_CLOCK;
+       trig_sync_trig_count[0] = SYNC_ZERO_CLOCK;
+       trig_sync_trig_count[1] = SYNC_ZERO_CLOCK;
+       trig_sync_trig_count[2] = SYNC_ZERO_CLOCK;
+       trig_sync_trig_count[3] = SYNC_ZERO_CLOCK;
    }
 }
 
@@ -167,6 +170,7 @@ void check_trig() {
    }
 }
 
+// *display
 
 void displayDivider(int divider) {
    if(divider<=96) {
@@ -175,11 +179,44 @@ void displayDivider(int divider) {
      int noteLength = 96 / divider;
      display2digit(noteLength);
      mySerialPort.print("w");
-     mySerialPort.print(B00010000,BYTE);  
-   } if(divider>96){
-     // halp
+     mySerialPort.print(B00010000,BYTE);       // print colon
+   } else {
+     int denominator = divider / 96;
+     mySerialPort.print(" ");
+     mySerialPort.print(denominator);
+     mySerialPort.print(" ");
+     mySerialPort.print(1);
    }
  }
+ 
+ void displayOffset(int offset) {
+     if(offset<10) {
+       mySerialPort.print(" ");
+       mySerialPort.print(offset);
+     } else {
+       mySerialPort.print(offset);
+     }
+     mySerialPort.print(16);          // offset denominator
+     mySerialPort.print("w");
+     mySerialPort.print(B00010000,BYTE);  
+ }
+ 
+ void displaySwing(int swing) {
+     clearScreen();
+ }
+ 
+ void displayAutoreset(int autoreset) {
+     clearScreen();
+ }
+ 
+ void displayPolarity(boolean polarity) {
+     if(polarity==true) {
+       mySerialPort.print(" POS");
+     } else {
+       mySerialPort.print("SHRT");
+     }
+ }
+ 
 
 void display2digit(int num) {
    if(num < 10) {
@@ -206,32 +243,33 @@ void displayNum(int num) {
 }  
 
 
+// *trig
+
 void trig_on(byte output, long sync_trig_count) { 
   sync_trig_count = sync_trig_count - (trig_out_offset[output] * 6); // handle offset, multiply by six = sixteenths
-  
-   if(sync_trig_count==1 || (sync_trig_count % dividers[trig_out_divider[output]])==0) {
-      digitalWrite(trig_out_pin[output],1);
-      trig_out_state[output] = true;
-      trig_out_time[output] = millis();
-      bitWrite(statusPinsA, output, 1);
-      //updateLeds(statusPinsA);
-    }
+  if(trig_out_muted[output]==false && sync_trig_count>0) {
+     if(sync_trig_count==1 || (sync_trig_count % dividers[trig_out_divider[output]])==0) {
+        digitalWrite(trig_out_pin[output],trig_out_polarity[output]);
+        trig_out_state[output] = true;
+        trig_out_time[output] = millis();
+        bitWrite(statusPinsA, output, 1);
+      }
+  }
 }
 
 void trig_off(byte output) {
   time = millis();
   if(trig_out_state[output]==true && (time > (trig_out_time[output]+(trig_out_length[output]*dividers[trig_out_divider[output]])))) {
-    digitalWrite(trig_out_pin[output],0);
+    digitalWrite(trig_out_pin[output],!trig_out_polarity[output]);
     trig_out_state[output] == false;
     bitWrite(statusPinsA, output, 0);
-    //updateLeds(statusPinsA);
   }
 }
 
 void all_trig_off() {
   byte count;
   for(count=0;count<total_triggers;count++) {
-    digitalWrite(trig_out_pin[count],0);
+    digitalWrite(trig_out_pin[count],!trig_out_polarity[count]);
     trig_out_state[count] == false;  
   }
 }
@@ -267,7 +305,10 @@ void loop() {
      
      if(trig==true && trig_last==false) {
         sync_trig_count++;
-        
+        trig_sync_trig_count[0]++;
+        trig_sync_trig_count[1]++;
+        trig_sync_trig_count[2]++;
+        trig_sync_trig_count[3]++;
         
         tempoCount++;
         lastSyncPulseTime = syncPulseTime;
@@ -279,10 +320,10 @@ void loop() {
           tempoCount = 0;
         }
         
-        trig_on(0, sync_trig_count);
-        trig_on(1, sync_trig_count);
-        trig_on(2, sync_trig_count);
-        trig_on(3, sync_trig_count);
+        trig_on(0, trig_sync_trig_count[0]);
+        trig_on(1, trig_sync_trig_count[1]);
+        trig_on(2, trig_sync_trig_count[2]);
+        trig_on(3, trig_sync_trig_count[3]);
         
         trig_last= true;
      }
@@ -292,36 +333,41 @@ void loop() {
      trig_off(2);
      trig_off(3);
      
-     updateLeds(statusPinsA, statusPinsB);
-     //updateLeds(statusPinsB);
      
      if(trig==false) {
       trig_last=false; 
      }
      
-    // if not in edit mode, display tempo
-   if(currentlyEditedTrigger==255 && tempoCount==24) {
-     displayNum(calcTempo(runningSyncPulseTime));
-     mySerialPort.print("w");
-     mySerialPort.print(B00000000,BYTE);
-   }
-   
-   if(currentlyEditedTrigger<255) {
-     displayDivider(dividers[trig_out_divider[currentlyEditedTrigger]]);
-   }
-   
- 
+      // if not in edit mode, display tempo
+     if(editMode==0 && tempoCount==24) {
+       displayNum(calcTempo(runningSyncPulseTime));
+       mySerialPort.print("w");
+       mySerialPort.print(B00000000,BYTE);
+     }
+
    } else {
      // stopped, so turn all triggers and LEDs off
      all_trig_off();
-    // updateLeds(0);
-    clearScreen();
+     clearScreen();
+     clearTrigLEDs();
    }
    
-   editDividerModeCheck(0);
-   editDividerModeCheck(1);
-   editDividerModeCheck(2);
-   editDividerModeCheck(3);
+   updateLeds(statusPinsA, statusPinsB);
+   
+   editModeCheck(0);
+   editModeCheck(1);
+   editModeCheck(2);
+   editModeCheck(3);
+   
+   changeMute(0);
+   changeMute(1);
+   changeMute(2);
+   changeMute(3);
+   
+   autoReset(0);
+   autoReset(1);
+   autoReset(2);
+   autoReset(3);
    
    switch (editMode) {
     case 1:
@@ -329,19 +375,39 @@ void loop() {
       changeDivider(1);
       changeDivider(2);
       changeDivider(3);
+      displayDivider(dividers[trig_out_divider[currentlyEditedTrigger]]);
       break;
     case 2:
       changeOffset(0);
       changeOffset(1);
       changeOffset(2);
       changeOffset(3);
+      displayOffset(trig_out_offset[currentlyEditedTrigger]);
+      break;
+    case 3:
+      // do swing
+      displaySwing(trig_out_swing[currentlyEditedTrigger]);
+      break;
+    case 4:
+      // do autoreset
+      changeAutoreset(0);
+      changeAutoreset(1);
+      changeAutoreset(2);
+      changeAutoreset(3);
+      displayAutoreset(trig_out_autoreset[currentlyEditedTrigger]);
+      break;
+    case 5:
+      // do polarity change
+      changePolarity(0);
+      changePolarity(1);
+      changePolarity(2);
+      changePolarity(3);
+      displayPolarity(trig_out_polarity[currentlyEditedTrigger]);
+      break;
+    case 6:
+      clearScreen();
       break;
   }
-   
-
-   
-   
-   
  }
  
  
@@ -352,15 +418,18 @@ void clearScreen() {
 } 
  
  
-void editDividerModeCheck(byte output) {
-  if(bitRead(switchesA, output)==1 && trig_out_editmode[output]==false && bitRead(lastSwitchStatus, output)==0) {  // set to edit on
+void editModeCheck(byte output) {
+  if(bitRead(switchesA, output)==1 && checkShifted()==false && bitRead(lastSwitchStatus, output)==0 && trig_out_editmode[output]==false && lastEditedTrigger!=currentlyEditedTrigger) {  // set to edit on
      for(int i=0;i<total_triggers; i++) {
        trig_out_editmode[i] = false;
      }
      
-     trig_out_editmode[output] = true;
-     int lastEditedTrigger = currentlyEditedTrigger;
+     lastEditedTrigger = currentlyEditedTrigger;
      currentlyEditedTrigger = output;
+     
+     trig_out_editmode[output] = true;
+     
+    
      if(lastEditedTrigger!=currentlyEditedTrigger) {
        editMode = 0; 
      }
@@ -376,26 +445,34 @@ void editDividerModeCheck(byte output) {
      bitWrite(lastSwitchStatus, output, 1); 
    }
    
-   if(bitRead(switchesA, output)==1 && trig_out_editmode[output]==true && editMode<editModeNum && bitRead(lastSwitchStatus, output)==0) { 
+   if(bitRead(switchesA, output)==0) {
+       bitWrite(lastSwitchStatus, output, 0); 
+   }
+   
+   if(bitRead(switchesA, output)==1  && checkShifted()==false && bitRead(lastSwitchStatus, output)==0 && trig_out_editmode[output]==true && editMode<editModeNum) { 
        editMode++; 
        clearEditModeLEDs();
        bitWrite(statusPinsB, editMode-1, 1);
        bitWrite(lastSwitchStatus, output, 1); 
    }
   
-   if(bitRead(switchesA, output)==1 && trig_out_editmode[output]==true && editMode==editModeNum && bitRead(lastSwitchStatus, output)==0) {  // set to edit on
+   if(bitRead(switchesA, output)==1  && checkShifted()==false && bitRead(lastSwitchStatus, output)==0 && trig_out_editmode[output]==true && editMode==editModeNum) {  // set to edit on
      clearEditModeLEDs();
      editMode=0;
      trig_out_editmode[output] = false;
      currentlyEditedTrigger = 255;
+     lastEditedTrigger = 254;
      bitWrite(statusPinsA, output+4, 0);
      bitWrite(lastSwitchStatus, output, 1); 
    }
-   
-    if(bitRead(switchesA, output)==0) {
-     bitWrite(lastSwitchStatus, output, 0); 
-   }
  
+} 
+ 
+void clearTrigLEDs() {
+   bitWrite(statusPinsA, 0, 0);
+   bitWrite(statusPinsA, 1, 0);
+   bitWrite(statusPinsA, 2, 0);
+   bitWrite(statusPinsA, 3, 0);
 } 
  
  
@@ -408,45 +485,50 @@ void clearEditModeLEDs() {
    bitWrite(statusPinsB, 5, 0);
 }
 
+// switchchecks
 
-boolean checkSwitchPress(byte swi) {
-  boolean switchPressed;
-  if(bitRead(switchesA, swi)==1 && bitRead(lastSwitchStatus, swi)==0) {
-    switchPressed = true;
+boolean checkSwitchPressed(byte swi) {
+  if(bitRead(switchesA, swi)==1  && bitRead(lastSwitchStatus, swi)==0) {
     bitWrite(lastSwitchStatus, swi, 1); 
+    return true;
+  } else {
+    return false; 
   }
-  
-  if(bitRead(switchesA, swi)==0) {
-     bitWrite(lastSwitchStatus, swi, 0); 
-     switchPressed = false;
-   }
-   
-  return switchPressed;
 }
 
-void changeDivider(byte output) {
-   if(bitRead(switchesA, SWI_DOWN)==1  && trig_out_editmode[output]==true && bitRead(lastSwitchStatus, SWI_DOWN)==0) {
-     if(trig_out_divider[output]<dividersNum-1) {
-       trig_out_divider[output] = trig_out_divider[output]++;
+void checkSwitchUp(byte swi) {
+   if(bitRead(switchesA, swi)==0) {
+       bitWrite(lastSwitchStatus, swi, 0); 
+   }
+}
+
+boolean checkShifted() {
+  if(bitRead(switchesA, SWI_SHIFT)==1) {
+    return true;
+  }  else {
+    return false;
+  }
+}
+
+
+// dochanges
+
+void changeDivider(byte output) {  
+   if(trig_out_editmode[output]==true) {  
+     if(checkSwitchPressed(SWI_DOWN)==true) {
+       if(trig_out_divider[output]<dividersNum-1) {
+         trig_out_divider[output] = trig_out_divider[output]++;
+       }
      }
-     bitWrite(lastSwitchStatus, SWI_DOWN, 1); 
+     checkSwitchUp(SWI_DOWN);
+          
+     if(checkSwitchPressed(SWI_UP)==true) {
+       if(trig_out_divider[output]>0) {
+         trig_out_divider[output] = trig_out_divider[output]--;
+       }
+     }
+     checkSwitchUp(SWI_UP);
    }
-   
-   if(bitRead(switchesA, SWI_DOWN)==0) {
-     bitWrite(lastSwitchStatus, SWI_DOWN, 0); 
-   }
-   
-   if(bitRead(switchesA, SWI_UP)==1  && trig_out_editmode[output]==true && bitRead(lastSwitchStatus, SWI_UP)==0) {
-     if(trig_out_divider[output]>0) {
-       trig_out_divider[output] = trig_out_divider[output]--;
-     } 
-     bitWrite(lastSwitchStatus, SWI_UP, 1); 
-   }
-   
-   if(bitRead(switchesA, SWI_UP)==0) {
-     bitWrite(lastSwitchStatus, SWI_UP, 0); 
-   }
-   
 }
 
 
@@ -475,6 +557,54 @@ void changeOffset(byte output) {
    
 }
 
+void changePolarity(byte output) {
+  if(checkSwitchPressed(SWI_DOWN)==true) {
+    trig_out_polarity[output] = !trig_out_polarity[output];
+  }
+  
+  checkSwitchUp(SWI_DOWN);
+  
+  if(checkSwitchPressed(SWI_UP)==true) {
+    trig_out_polarity[output] = !trig_out_polarity[output];
+  }
+  
+  checkSwitchUp(SWI_UP);  
+}
+
+void changeMute(byte output) {
+  if(checkSwitchPressed(output) && checkShifted()==true) {
+    trig_out_muted[output] = !trig_out_muted[output];
+  }
+  
+  checkSwitchUp(output);
+}
+
+void changeAutoreset(byte output) {
+   if(trig_out_editmode[output]==true) {  
+     if(checkSwitchPressed(SWI_DOWN)==true) {
+       if(trig_out_autoreset[output]<(sizeof(autoreset_divisions)/sizeof(int))) {
+         trig_out_autoreset[output] = trig_out_autoreset[output]++;
+       }
+     }
+     checkSwitchUp(SWI_DOWN);
+          
+     if(checkSwitchPressed(SWI_UP)==true) {
+       if(trig_out_autoreset[output]>0) {
+         trig_out_autoreset[output] = trig_out_autoreset[output]--;
+       }
+     }
+     checkSwitchUp(SWI_UP);
+   }
+}
+
+
+void autoReset(byte output) {
+  if(autoreset_divisions[trig_out_autoreset[output]]!=0 && trig_sync_trig_count[output]>0) {
+    if(autoreset_divisions[trig_out_autoreset[output]]==trig_sync_trig_count[output]) {
+      trig_sync_trig_count[output]=SYNC_ZERO_CLOCK;
+    }
+  }
+}
 
  
 int calcTempo(long lTimeBetweenBeats) {
@@ -489,8 +619,6 @@ int calcTempo(long lTimeBetweenBeats) {
  void saveAll() {
    
  }
- 
-
  
  
  
