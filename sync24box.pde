@@ -55,9 +55,7 @@
 #define SWI_UP 5
 #define SWI_SHIFT 7
 
-
 #define SYNC_ZERO_CLOCK -1
-
 
 
 const byte total_triggers = 4;
@@ -81,10 +79,9 @@ boolean trig_out_muted[total_triggers] = {false,false,false,false};
 byte trig_out_random[total_triggers] = {0,0,0,0};
 const byte dividersNum = 15;
 int dividers[] = {2, 3, 6, 8, 12, 16, 24, 32, 48, 72, 96, 144, 192, 288, 384};
-int autoreset_divisions[] = {0, 48, 96, 144, 192};
+int autoreset_divisions[] = {0, 24, 48, 72, 96, 144, 192};
 
 long sync_trig_count = SYNC_ZERO_CLOCK;
-
 unsigned long time;
 unsigned long syncPulseTime;
 unsigned long lastSyncPulseTime;
@@ -102,17 +99,20 @@ byte statusPinsA = 0;                              // first set of 8 LEDs
 byte statusPinsB = 0;                              // second set of 8 LEDs
 byte currentlyEditedTrigger = 255;                 // 255 is the off value.
 byte lastEditedTrigger = 254;
+int memCount = 0;
 
 // booleans for status
 boolean running = false;
 boolean trig = false;
 boolean trig_last = false;
+boolean saved = true;
 
 void setup() {
   randomSeed(analogRead(0));
   setup_pins();
   updateLeds(statusPinsA, statusPinsB);
   serial_display_setup();
+  loadAll();
 }
 
 
@@ -215,11 +215,11 @@ void displayDivider(int divider) {
  void displayAutoreset(int autoreset) {
    if(autoreset==0) {
      mySerialPort.print(" off");
-     mySerialPort.print("w");
-     mySerialPort.print(B00000000,BYTE);       // clear
    } else {
      displayDivider(autoreset);
    }
+   mySerialPort.print("w");
+   mySerialPort.print(B00000000,BYTE);       // clear
  }
  
  void displayPolarity(boolean polarity) {
@@ -372,6 +372,9 @@ void loop() {
      all_trig_off();
      clearScreen();
      clearTrigLEDs();
+     if(saved!=true && editMode==0) {
+        saveAll(); 
+     }
    }
    
    updateLeds(statusPinsA, statusPinsB);
@@ -391,6 +394,7 @@ void loop() {
    autoReset(2);
    autoReset(3);
    
+   
    switch (editMode) {
     case 1:
       changeDivider(0);
@@ -398,6 +402,7 @@ void loop() {
       changeDivider(2);
       changeDivider(3);
       displayDivider(dividers[trig_out_divider[currentlyEditedTrigger]]);
+      saved=false; 
       break;
     case 2:
       changeOffset(0);
@@ -405,10 +410,12 @@ void loop() {
       changeOffset(2);
       changeOffset(3);
       displayOffset(trig_out_offset[currentlyEditedTrigger]);
+      saved=false; 
       break;
     case 3:
       // do swing
       displaySwing(trig_out_swing[currentlyEditedTrigger]);
+      saved=false; 
       break;
     case 4:
       // do autoreset
@@ -417,6 +424,7 @@ void loop() {
       changeAutoreset(2);
       changeAutoreset(3);
       displayAutoreset(autoreset_divisions[trig_out_autoreset[currentlyEditedTrigger]]);
+      saved=false; 
       break;
     case 5:
       // do polarity change
@@ -425,12 +433,14 @@ void loop() {
       changePolarity(2);
       changePolarity(3);
       displayPolarity(trig_out_polarity[currentlyEditedTrigger]);
+      saved=false; 
       break;
     case 6:
       for(int i=0;i<total_triggers;i++) {
         changeRandomGate(i);
       }
       displayRandomGate(trig_out_random[currentlyEditedTrigger]);
+      saved=false; 
       break;
   }
  }
@@ -582,18 +592,21 @@ void changeOffset(byte output) {
    
 }
 
+
 void changePolarity(byte output) {
-  if(checkSwitchPressed(SWI_DOWN)==true) {
-    trig_out_polarity[output] = !trig_out_polarity[output];
+  if(trig_out_editmode[output]==true) {  
+    if(checkSwitchPressed(SWI_DOWN)==true) {
+      trig_out_polarity[output] = !trig_out_polarity[output];
+    }
+    
+    checkSwitchUp(SWI_DOWN);
+    
+    if(checkSwitchPressed(SWI_UP)==true) {
+       trig_out_polarity[output] = !trig_out_polarity[output];
+    }
+    
+    checkSwitchUp(SWI_UP);  
   }
-  
-  checkSwitchUp(SWI_DOWN);
-  
-  if(checkSwitchPressed(SWI_UP)==true) {
-    trig_out_polarity[output] = !trig_out_polarity[output];
-  }
-  
-  checkSwitchUp(SWI_UP);  
 }
 
 void changeMute(byte output) {
@@ -606,6 +619,7 @@ void changeMute(byte output) {
 
 void changeAutoreset(byte output) {
    if(trig_out_editmode[output]==true) {  
+     
      if(checkSwitchPressed(SWI_UP)==true) {
        if(trig_out_autoreset[output]<(sizeof(autoreset_divisions)/sizeof(int))-1) {
          trig_out_autoreset[output] = trig_out_autoreset[output]++;
@@ -671,10 +685,93 @@ int calcTempo(long lTimeBetweenBeats) {
 }
 
 
+void writeByteArray(byte arrToSave[]) {
+  for (int i = 0; i < total_triggers; i++) {
+    EEPROM.write(memCount, arrToSave[i]);
+    memCount++;
+  }
+}
 
+void writeIntArray(int arrToSave[]) {
+   for (int i = 0; i < total_triggers; i++) {
+      EEPROM.write(memCount, highByte(arrToSave[i]));
+      memCount++;
+      EEPROM.write(memCount, lowByte(arrToSave[i]));
+      memCount++;
+  }
+}
+
+void writeIntArray(unsigned int arrToSave[]) {
+   for (int i = 0; i < total_triggers; i++) {
+      EEPROM.write(memCount, highByte(arrToSave[i]));
+      memCount++;
+      EEPROM.write(memCount, lowByte(arrToSave[i]));
+      memCount++;
+  }
+}
  
  void saveAll() {
-   
+      memCount = 0;
+      EEPROM.write(memCount, 127);        // to show we've got something saved...
+      memCount++;
+      writeByteArray(trig_out_divider);
+      writeByteArray(trig_out_offset);
+      writeByteArray(trig_out_random);
+      
+      writeByteArray(trig_out_polarity);
+      writeByteArray(trig_out_muted);
+      
+      writeIntArray(trig_out_length);
+      writeIntArray(trig_out_swing);
+      writeIntArray(trig_out_autoreset);
+ }
+ 
+ void readByteArray(byte arrRead[]) {
+     for (int i = 0; i < total_triggers; i++) {
+      arrRead[i] = EEPROM.read(memCount);
+      memCount++;
+     }
+ }
+ 
+ void readIntArray(int arrRead[]) {
+    for (int i = 0; i < total_triggers; i++) {
+      byte high_byte = EEPROM.read(memCount);
+      memCount++;
+      byte low_byte = EEPROM.read(memCount);
+      memCount++;
+      arrRead[i] = word(high_byte, low_byte);
+     }
+ }
+ 
+ void readIntArray(unsigned int arrRead[]) {
+    for (int i = 0; i < total_triggers; i++) {
+      byte high_byte = EEPROM.read(memCount);
+      memCount++;
+      byte low_byte = EEPROM.read(memCount);
+      memCount++;
+      arrRead[i] = word(high_byte, low_byte);
+     }
+ }
+
+
+
+ 
+ 
+ void loadAll() {
+    memCount = 0;
+    if(EEPROM.read(memCount)==127) {
+      memCount++;
+      readByteArray(trig_out_divider);
+      readByteArray(trig_out_offset);
+      readByteArray(trig_out_random);
+      
+      readByteArray(trig_out_polarity);
+      readByteArray(trig_out_muted);
+      
+      readIntArray(trig_out_length);
+      readIntArray(trig_out_swing);
+      readIntArray(trig_out_autoreset);
+    }
  }
  
  
