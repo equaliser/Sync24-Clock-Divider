@@ -1,0 +1,5 @@
+Sync24 Clock Divider
+=========================
+
+This is an Arduino sketch for dividing up Sync24/DIN Sync clock signals from pre-MIDI drum machines and sequencers, to send to other sequencers or synths.
+
